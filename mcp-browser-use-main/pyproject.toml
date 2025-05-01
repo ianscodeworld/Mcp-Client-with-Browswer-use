@@ -1,0 +1,40 @@
+[project]
+name = "mcp-browser-use"
+version = "0.1.5"
+description = "MCP server for browser-use"
+requires-python = ">=3.10"
+authors = [
+    {name = "Vinayak Mehta", email = "vmehta94@gmail.com"},
+]
+dependencies = [
+    "mcp>=0.1.0",
+    "python-dotenv>=1.0.0",
+    "fastapi>=0.109.0",
+    "uvicorn>=0.27.0",
+    "playwright>=1.50.0",
+    "browser-use>=0.1.40",
+]
+readme = "README.md"
+license = {text = "Apache-2.0"}
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "License :: OSI Approved :: Apache Software License",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/vinayak-mehta/mcp-browser-use"
+"Bug Tracker" = "https://github.com/vinayak-mehta/mcp-browser-use/issues"
+
+[project.scripts]
+mcp-browser-use = "mcp_browser_use.server:main"
+
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = ["mcp_browser_use"]

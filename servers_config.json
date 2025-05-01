@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "browser-use": {
+      "command": "python",
+      "args": ["./mcp-browser-use-main/src/mcp_browser_use/server.py"]
+    }
+  },
+  "env": {
+        "BROWSER_USE_LOGGING_LEVEL": "INFO",
+        "PYTHONIOENCODING": "utf-8",
+        "PYTHONUNBUFFERED": "1",
+        "PYTHONUTF8": "1"
+      }
+}
