@@ -1,5 +1,10 @@
 {
+
   "mcpServers": {
+    "weather and local": {
+      "command": "python",
+      "args": ["./mcp_server/mcp_server.py"]
+    },
     "browser-use": {
       "command": "python",
       "args": ["./mcp-browser-use-main/src/mcp_browser_use/server.py"]

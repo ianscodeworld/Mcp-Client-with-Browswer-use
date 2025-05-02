@@ -4,7 +4,7 @@ import logging
 import os
 import shutil
 from typing import Dict, List, Optional, Any
-
+from LLClient import LLMClient, get_response
 import requests
 from dotenv import load_dotenv
 from mcp import ClientSession, StdioServerParameters
@@ -127,7 +127,7 @@ class Server:
                         logging.info(
                             f"Tool '{tool.name}' will support progress tracking"
                         )
-        print([tools])
+        # print([tools])
         return tools
 
     async def execute_tool(
@@ -235,59 +235,6 @@ class Tool:
         }
 
 
-
-class LLMClient:
-    """Manages communication with the LLM provider."""
-
-    def __init__(self, api_key: str) -> None:
-        self.api_key: str = api_key
-
-    def get_response(self, messages: List[Dict[str, str]]) -> str:
-        """Get a response from the LLM.
-
-        Args:
-            messages: A list of message dictionaries.
-
-        Returns:
-            The LLM's response as a string.
-
-        Raises:
-            RequestException: If the request to the LLM fails.
-        """
-        url = "https://api.siliconflow.cn/v1/chat/completions"
-        # url = "https://models.inference.ai.azure.com/chat/completions"
-
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}",
-        }
-        payload = {
-            "messages": messages,
-            "model": "Qwen/Qwen2.5-72B-Instruct-128K",
-            "temperature": 0.85,
-            "top_p": 1,
-            "stream": False,
-            "stop": None,
-        }
-
-        try:
-            response = requests.post(url, headers=headers, json=payload)
-            response.raise_for_status()
-            data = response.json()
-            return data["choices"][0]["message"]["content"]
-
-        except requests.exceptions.RequestException as e:
-            error_message = f"Error getting LLM response: {str(e)}"
-            logging.error(error_message)
-
-            if e.response is not None:
-                status_code = e.response.status_code
-                logging.error(f"Status code: {status_code}")
-                logging.error(f"Response details: {e.response.text}")
-
-            return f"I encountered an error: {error_message}. Please try again or rephrase your request."
-
-
 class ChatSession:
     """Orchestrates the interaction between user, LLM, and tools."""
 
@@ -295,21 +242,6 @@ class ChatSession:
         self.servers: List[Server] = servers
         self.llm_client: LLMClient = llm_client
 
-    @staticmethod
-    def is_valid_json(json_str: str) -> bool:
-        """Check if the provided string is a valid JSON.
-
-        Args:
-            json_str: The string to check.
-
-        Returns:
-            True if the string is a valid JSON, False otherwise.
-        """
-        try:
-            json.loads(json_str)
-            return True
-        except json.JSONDecodeError:
-            return False
 
     async def cleanup_servers(self) -> None:
         """Clean up all servers properly."""
@@ -317,49 +249,62 @@ class ChatSession:
         for server in self.servers:
             await server.cleanup()
 
-    async def process_llm_response(self, llm_response: str) -> str:
-        """Process the LLM response and execute tools if needed.
+    async def process_llm_response(self, tool_call: dict) -> str:
+  
+        executed = False
+        for server in self.servers:
+            tools = await server.list_tools()
+            if any(tool.name == tool_call["tool"] for tool in tools):
+                try:
+                    result = await server.execute_tool(
+                        tool_call["tool"], tool_call["arguments"]
+                    )
+                    result_texts = [item.text for item in result.content if item.type == "text"]
+                    executed = True
+                    logging.info(f"Tool execution result: {result}")
+                    break  
+                except Exception as e:
+                    error_msg = f"Error executing tool {tool_call['tool']}: {str(e)}"
+                    logging.error(error_msg)
+                    break
+        if not executed:
+            logging.info(f"No server found with tool: {tool_call['tool']}")
+        return result_texts
 
-        Args:
-            llm_response: The response from the LLM.
+    def buildContent(self, role, userInput)-> Dict:
+        aContect = {
+            "role": role,
+            "parts": [
+                {
+                    "text":userInput
+                }
+            ]
+        }
+        return aContect
 
-        Returns:
-            The result of tool execution or the original response.
-        """
-        import json
+    def buildToolContent(self, role,tool_name, result)-> Dict:
+        aContect = {
+            "role": role,
+            "parts": [
+                {
+                    "functionResponse": {
+                        "name": tool_name,
+                        "response": {
+                            "result": result
+                        }
+                    }
+                }
 
-        try:
-            tool_call = json.loads(llm_response)
-            if "tool" in tool_call and "arguments" in tool_call:
-                logging.info(f"Executing tool: {tool_call['tool']}")
-                logging.info(f"With arguments: {tool_call['arguments']}")
+            ]
+        }
+        return aContect    
 
-                for server in self.servers:
-                    tools = await server.list_tools()
-                    if any(tool.name == tool_call["tool"] for tool in tools):
-                        try:
-                            result = await server.execute_tool(
-                                tool_call["tool"], tool_call["arguments"]
-                            )
-
-                            if isinstance(result, dict) and "progress" in result:
-                                progress = result["progress"]
-                                total = result["total"]
-                                logging.info(
-                                    f"Progress: {progress}/{total} ({(progress/total)*100:.1f}%)"
-                                )
-                            logging.error(f"McpSever result: {result}")
-                            return f"Tool execution result: {result}"
-                        except Exception as e:
-                            error_msg = f"Error executing tool: {str(e)}"
-                            logging.error(error_msg)
-                            return error_msg
-
-                return f"No server found with tool: {tool_call['tool']}"
-            return llm_response
-        except json.JSONDecodeError:
-            logging.error(f"McpSever Error: {llm_response}")
-            return llm_response
+    def buildModelContent(self, functionCall)-> Dict:
+        aContect = {
+            "role": "model",
+            "parts": functionCall
+        }
+        return aContect 
 
     async def start(self) -> None:
         """Main chat session handler."""
@@ -371,71 +316,60 @@ class ChatSession:
                     logging.error(f"Failed to initialize server: {e}")
                     await self.cleanup_servers()
                     return
-
+            playLoad = {"contents":[],
+                        "tools": {
+                            "function_declarations":[]
+                            }
+                        }
             all_tools = []
             for server in self.servers:
                 tools = await server.list_tools()
                 all_tools.extend(tools)
+            
+            toolsList = [tool.format_for_gemini() for tool in all_tools]
+            toolConfig = {"tools": {
+                            "functionDeclarations":toolsList
+                            }
+                        }
+            playLoad["tools"]["function_declarations"].extend(toolsList)
 
-            tools_description = [tool.format_for_gemini() for tool in all_tools]
-            print(tools_description)
-            system_message = f"""You are a helpful assistant with access to these tools:
+            # print("**************************************json.dumps(tool)*************************************************")
+            # for tool in toolsList:
+            #     print(json.dumps(toolConfig))
+            # print("********************************************************************************")
 
-{tools_description}
-You are an intelligent assistant that follows instructions carefully.
+            # playLoad.append(toolConfig)
 
-Your task is to assist the user with their request. The rules for using tools are as follows:
-
-1.!strict: If a tool is needed to answer the user's question, you must respond ONLY with the exact JSON object in the format shown below.And always execute a tool one time. Do not add any extra text or explanation:
-
-{{
-    "tool": "tool-name",
-    "arguments": {{
-        "argument-name": "value"
-    }},
-    "content": "what you wanna said"
-}}
-!
-2. After receiving the tool's response, you need to:
-   a. Convert the raw response into a natural and conversational reply.
-   b. Keep the response concise and to the point.
-   c. Focus on the most relevant information.
-   d. Use the context from the user's question.
-   e. Do not simply repeat the raw data.
-
-3. Only use the tools that have been explicitly defined and provided.
-
-4. If no tool is needed, provide a direct and helpful response to the user.
-
-5. If the previous step exist error, provide necessary info for user fix that issue.
-Remember to follow these rules precisely to ensure the best user experience.
-
-
-"""
-
-            messages = [{"role": "system", "content": system_message}]
-
+            
             while True:
                 try:
                     user_input = input("You: ").strip().lower()
                     if user_input in ["quit", "exit"]:
                         logging.info("\nExiting...")
                         break
+                    print(user_input)
+                    playLoad["contents"].append(self.buildContent("user",user_input))
+                    
 
-                    messages.append({"role": "user", "content": user_input})
+                    
                     is_continue = True
                     while is_continue:
-                        llm_response = self.llm_client.get_response(messages)
-                        is_json = self.is_valid_json(llm_response)
-                        logging.info("\nAssistant: %s", llm_response)
-                        if is_json:
-                            result = await self.process_llm_response(llm_response)
-                            messages.append(
-                                {"role": "assistant", "content": llm_response}
-                            )
-                            messages.append({"role": "system", "content": result})
+                        llm_responses = self.llm_client.get_response(playLoad)
+                        for response in llm_responses:
+                            if isinstance(response, dict) and "functionCall" in response:
+                                has_function_call = True
+                                tool_call = {
+                                    'tool': response['functionCall']['name'],
+                                    'arguments': response['functionCall']['args']
+                                }
+                                
+                                playLoad["contents"].append(self.buildModelContent(response))
+                                result = await self.process_llm_response(tool_call)
+                                playLoad["contents"].append(self.buildToolContent("user",response['functionCall']['name'],result))
+                            else:
+                                is_continue = False
                         else:
-                            is_continue = False
+                            print(response)
                 except KeyboardInterrupt:
                     logging.info("\nExiting...")
                     break
@@ -447,15 +381,17 @@ Remember to follow these rules precisely to ensure the best user experience.
 async def main() -> None:
     """Initialize and run the chat session."""
     config = Configuration()
-    server_config = config.load_config("servers_config.json")
-    servers = [
+    mcpServer_config = config.load_config("servers_config.json")
+    mcpServers = [
         Server(name, srv_config)
-        for name, srv_config in server_config["mcpServers"].items()
+        for name, srv_config in mcpServer_config["mcpServers"].items()
     ]
-    llm_client = LLMClient(config.llm_api_key)
-    chat_session = ChatSession(servers, llm_client)
+    llm_client = LLMClient()
+    chat_session = ChatSession(mcpServers, llm_client)
     await chat_session.start()
 
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+
